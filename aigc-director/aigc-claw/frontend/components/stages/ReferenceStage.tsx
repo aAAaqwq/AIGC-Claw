@@ -343,7 +343,7 @@ export default function ReferenceStage({ state, sessionId, onConfirm, onInterven
     setSavingIds(prev => new Set(prev).add(sceneId));
     try {
       // 调用后端 API 保存提示词
-      const response = await fetch(`/api/project/${sessionId}/artifact/storyboard`, {
+      const response = await fetch(`/api/project/${sessionId}/artifact/reference_generation`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -362,6 +362,13 @@ export default function ReferenceStage({ state, sessionId, onConfirm, onInterven
         });
         // 更新本地状态，使用保存后的值
         setEditDescs(prev => ({ ...prev, [sceneId]: newPrompt }));
+        // 同步更新 artifact 以便后续阶段能获取最新的提示词
+        if (onUpdateArtifact && state.artifact?.scenes) {
+          const updatedScenes = state.artifact.scenes.map((s: SceneItem) =>
+            s.id === sceneId ? { ...s, description: newPrompt } : s
+          );
+          onUpdateArtifact({ scenes: updatedScenes });
+        }
       }
     } catch (error) {
       console.error('保存提示词失败:', error);

@@ -336,14 +336,11 @@ export default function VideoStage({ state, sessionId, onConfirm, onIntervene, o
 
     setSavingIds(prev => new Set(prev).add(clipId));
     try {
-      const response = await fetch(`/api/project/${sessionId}/artifact/reference_generation`, {
+      const response = await fetch(`/api/project/${sessionId}/artifact/video_generation`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          shots: clips.map(c => ({
-            shot_id: c.id,
-            video_prompt: c.id === clipId ? newPrompt : c.description
-          }))
+          [clipId]: { description: newPrompt }
         })
       });
       if (response.ok) {

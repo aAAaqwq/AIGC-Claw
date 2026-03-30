@@ -50,6 +50,7 @@ def setup_concurrent_logging():
 
 # 启动并发日志监听器
 _log_listener = setup_concurrent_logging()
+logger = logging.getLogger("api_server")
 # =================================
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -376,96 +377,169 @@ async def update_models(session_id: str, request: Request):
 
 @app.patch("/api/project/{session_id}/artifact/{stage}")
 async def update_artifact(session_id: str, stage: str, request: Request):
-    """保存用户在某阶段的选择（如选定的图片/视频版本）
+    """保存用户在某阶段的选择/修改
 
     数据存储策略：
     - 用户修改只保存到 sessions json（state.artifacts）
     - result/script json 只作为 LLM 初始生成，不接受用户修改
+
+    按阶段分类处理：
+    - 第二阶段(character_design): 修改 characters[]/settings[] 的 description
+    - 第三阶段(storyboard): 修改 shots[] 的 duration/plot/visual_prompt
+    - 第四阶段(reference_generation): 修改 scenes[] 的 description（视觉提示词）
+    - 第五阶段(video_generation): 修改 clips[] 的 duration/description
     """
     state = workflow_engine.get_state(session_id)
     if not state:
         raise HTTPException(404, "Session not found")
     body = await request.json()
 
-    # 第三阶段分镜修改：同步更新 video_generation 的 clips duration
-    if stage == "storyboard" and "shots" in body:
-        shot_durations = {s['shot_id']: s.get('duration', 10) for s in body['shots'] if 'shot_id' in s}
-        video_art = state.artifacts.get('video_generation', {})
-        if isinstance(video_art, dict) and 'clips' in video_art:
-            for clip in video_art['clips']:
-                shot_id = clip.get('id')
-                if shot_id in shot_durations:
-                    clip['duration'] = shot_durations[shot_id]
-                    logger.info(f"Synced duration {shot_durations[shot_id]}s to video_generation clip {shot_id}")
-        # 移除 shots，避免合并到 storyboard artifact
-        body = {k: v for k, v in body.items() if k != "shots"}
+    # ══════════════════════════════════════════════════════════════
+    # 第二阶段：角色/背景描述修改
+    # 修改 characters[].description 或 settings[].description
+    # 不涉及跨阶段同步
+    # ══════════════════════════════════════════════════════════════
+    if stage == "character_design":
+        # 直接更新 body，由后续逻辑合并到 artifact
+        pass
 
-    # 第三阶段确认新分镜：清除 is_new 标记
-    if stage == "storyboard" and "shots" in body:
-        updated_shots = body.get('shots', [])
-        # 清除所有 is_new 标记
-        for shot in updated_shots:
+    # ══════════════════════════════════════════════════════════════
+    # 第三阶段：分镜修改
+    # 修改 payload.shots[].duration / payload.shots[].plot / payload.shots[].visual_prompt
+    # 同步到：video_generation.clips[].duration, video_generation.clips[].description
+    # ══════════════════════════════════════════════════════════════
+    elif stage == "storyboard" and "shots" in body:
+        # 清除 is_new 标记（确认新分镜）
+        for shot in body['shots']:
             if 'is_new' in shot:
                 shot['is_new'] = False
-        logger.info(f"Confirmed new shots, cleared is_new flag for {len(updated_shots)} shots")
 
-    # 第三阶段清除 new_shot_ids 标记
-    if stage == "storyboard" and "new_shot_ids" in body and body.get('new_shot_ids') == []:
-        # 清除 new_shot_ids 标记
-        logger.info("Cleared new_shot_ids marker")
+        # 同步到 video_generation
+        shot_id_to_duration = {s['shot_id']: s.get('duration', 10) for s in body['shots'] if 'shot_id' in s}
+        shot_id_to_plot = {s['shot_id']: s.get('plot', '') for s in body['shots'] if 'shot_id' in s}
 
-    # 第五阶段视频提示词修改：更新 video_generation 的 clips
-    if stage == "reference_generation" and "shots" in body:
-        shot_prompts = {s['shot_id']: s.get('video_prompt', s.get('visual_prompt', ''))
-                        for s in body['shots'] if 'shot_id' in s}
-        shot_durations = {s['shot_id']: s.get('duration', 10) for s in body['shots'] if 'shot_id' in s}
         video_art = state.artifacts.get('video_generation', {})
         if isinstance(video_art, dict) and 'clips' in video_art:
             for clip in video_art['clips']:
                 shot_id = clip.get('id')
-                if shot_id in shot_prompts:
-                    clip['description'] = shot_prompts[shot_id]
-                if shot_id in shot_durations:
-                    clip['duration'] = shot_durations[shot_id]
-        # 移除 shots，避免合并到 reference_generation artifact
+                if shot_id in shot_id_to_duration:
+                    clip['duration'] = shot_id_to_duration[shot_id]
+                if shot_id in shot_id_to_plot:
+                    clip['description'] = shot_id_to_plot[shot_id]
+
+        # 移除 shots，避免覆盖 storyboard artifact
         body = {k: v for k, v in body.items() if k != "shots"}
 
-    # 第四阶段选择图片版本：需要更新 scenes 数组中的 selected
-    if stage == "reference_generation" and body:
+        # 清除 new_shot_ids 标记
+        if "new_shot_ids" in body and body.get('new_shot_ids') == []:
+            del body['new_shot_ids']
+
+    # ══════════════════════════════════════════════════════════════
+    # 第四阶段：参考图提示词修改
+    # 修改 scenes[].description（视觉提示词）
+    # 同步到：storyboard.shots[].visual_prompt
+    # ══════════════════════════════════════════════════════════════
+    elif stage == "reference_generation":
+        if "shots" in body:
+            # 修改视觉提示词 → 同步到 storyboard
+            # body.shots 是 [{shot_id: "...", visual_prompt: "..."}]
+            shot_id_to_prompt = {s['shot_id']: s.get('visual_prompt', '')
+                                 for s in body['shots'] if 'shot_id' in s}
+
+            storyboard_art = state.artifacts.get('storyboard', {})
+            # storyboard 结构: {shots: [...]} （无 payload 包装）
+            if isinstance(storyboard_art, dict):
+                shots = storyboard_art.get('shots', [])
+                for shot in shots:
+                    if isinstance(shot, dict):
+                        shot_id = shot.get('shot_id')
+                        if shot_id in shot_id_to_prompt:
+                            shot['visual_prompt'] = shot_id_to_prompt[shot_id]
+
+            # 同步到 reference_generation.scenes 的 description
+            ref_art = state.artifacts.get('reference_generation', {})
+            if isinstance(ref_art, dict):
+                scenes = ref_art.get('scenes', [])
+                for scene in scenes:
+                    if isinstance(scene, dict):
+                        scene_id = scene.get('id')
+                        if scene_id in shot_id_to_prompt:
+                            scene['description'] = shot_id_to_prompt[scene_id]
+
+            # 移除 shots，避免覆盖 reference_generation artifact
+            body = {k: v for k, v in body.items() if k != "shots"}
+
+        # 处理图片版本选择 {sceneId: path}
         ref_art = state.artifacts.get('reference_generation', {})
         if isinstance(ref_art, dict):
             scenes = ref_art.get('scenes', [])
-            # 检查 body 是否是 {sceneId: path} 格式
             is_selection_format = any(
                 isinstance(k, str) and not isinstance(v, (list, dict))
                 for k, v in body.items()
             )
             if is_selection_format and scenes:
-                # body 是 {sceneId: path} 格式，需要更新 scenes 数组
                 for scene in scenes:
                     scene_id = scene.get('id')
                     if scene_id and scene_id in body:
                         scene['selected'] = body[scene_id]
-                # 清空 body，避免覆盖 scenes
                 body = {}
 
-    # 第五阶段选择视频版本：需要更新 clips 数组中的 selected
-    if stage == "video_generation" and body:
+    # ══════════════════════════════════════════════════════════════
+    # 第五阶段：视频片段修改
+    # 修改 clips[].duration / clips[].description
+    # 同步到：storyboard.shots[].duration / storyboard.shots[].plot
+    # ══════════════════════════════════════════════════════════════
+    elif stage == "video_generation":
+        # 收集 clips 的修改
+        clip_id_to_duration = {}
+        clip_id_to_description = {}
+
+        for clip_id, value in body.items():
+            if isinstance(value, dict):
+                if 'duration' in value:
+                    clip_id_to_duration[clip_id] = value['duration']
+                if 'description' in value:
+                    clip_id_to_description[clip_id] = value['description']
+
+        # 同步到 storyboard 和 video_generation.clips
+        if clip_id_to_duration or clip_id_to_description:
+            storyboard_art = state.artifacts.get('storyboard', {})
+            # storyboard 结构: {shots: [...]} （无 payload 包装）
+            if isinstance(storyboard_art, dict):
+                shots = storyboard_art.get('shots', [])
+                for shot in shots:
+                    if isinstance(shot, dict):
+                        shot_id = shot.get('shot_id')
+                        if shot_id in clip_id_to_duration:
+                            shot['duration'] = clip_id_to_duration[shot_id]
+                        if shot_id in clip_id_to_description:
+                            shot['plot'] = clip_id_to_description[shot_id]
+
+            # 更新 video_generation.clips 的 duration 和 description
+            vid_art = state.artifacts.get('video_generation', {})
+            if isinstance(vid_art, dict):
+                clips = vid_art.get('clips', [])
+                for clip in clips:
+                    if isinstance(clip, dict):
+                        clip_id = clip.get('id')
+                        if clip_id in clip_id_to_duration:
+                            clip['duration'] = clip_id_to_duration[clip_id]
+                        if clip_id in clip_id_to_description:
+                            clip['description'] = clip_id_to_description[clip_id]
+
+        # 处理视频版本选择 {clipId: path}
         vid_art = state.artifacts.get('video_generation', {})
         if isinstance(vid_art, dict):
             clips = vid_art.get('clips', [])
-            # 检查 body 是否是 {clipId: path} 格式
             is_selection_format = any(
                 isinstance(k, str) and not isinstance(v, (list, dict))
                 for k, v in body.items()
             )
             if is_selection_format and clips:
-                # body 是 {clipId: path} 格式，需要更新 clips 数组
                 for clip in clips:
                     clip_id = clip.get('id')
                     if clip_id and clip_id in body:
                         clip['selected'] = body[clip_id]
-                # 清空 body，避免覆盖 clips
                 body = {}
 
     # 更新 state.artifacts 并保存到 sessions json
