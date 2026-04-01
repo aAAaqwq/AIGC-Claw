@@ -5,9 +5,11 @@ from config import Config
 try:
     from tool.vlm_dashscope import QwenVLClient
     from tool.vlm_gemini import GeminiVLClient
+    from tool.relay_client import RelayClient
 except ImportError:
     from vlm_dashscope import QwenVLClient
     from vlm_gemini import GeminiVLClient
+    from relay_client import RelayClient
 
 class VLM:
     def __init__(self,
@@ -18,7 +20,7 @@ class VLM:
                  local_proxy: Optional[str] = None):
         """
         Unified VLM (Vision Language Model) Client
-        Routes requests to DashScope (QwenVL) or Gemini based on model name.
+        Routes requests to DashScope (QwenVL), Gemini, or Relay based on model name.
         """
         # Initialize DashScope Client
         self.dashscope_client = QwenVLClient(
@@ -30,6 +32,16 @@ class VLM:
             api_key=gemini_api_key,
             base_url=gemini_base_url
         )
+
+        # Initialize Relay Client (中转站)
+        self._relay_client = None
+        relay_key = os.getenv("RELAY_API_KEY", "")
+        relay_url = os.getenv("RELAY_BASE_URL", "")
+        if relay_key and relay_url:
+            try:
+                self._relay_client = RelayClient(api_key=relay_key, base_url=relay_url)
+            except Exception:
+                pass
 
     def query(self,
              prompt: str,
@@ -53,9 +65,14 @@ class VLM:
 
         # Determine backend provider
         model_lower = model.lower()
-        is_gemini = "gemini" in model_lower
+        is_relay = self._is_relay_model(model_lower)
 
-        if is_gemini:
+        if is_relay and self._relay_client:
+            # 通过中转站调用 VLM
+            return self._relay_client.vlm_chat(
+                prompt=prompt, image_paths=image_paths, model=model
+            )
+        elif "gemini" in model_lower:
             # 处理图片路径
             processed_images = []
             for p in image_paths or []:
@@ -96,3 +113,23 @@ class VLM:
                     abs_path = os.path.abspath(p)
                     file_urls.append(f"file://{abs_path}")
             return self.dashscope_client.chat(text=prompt, images=file_urls, model=model, stream=False)
+
+    def _is_relay_model(self, model_lower: str) -> bool:
+        """判断模型是否应通过中转站调用"""
+        if not self._relay_client:
+            return False
+        try:
+            import json
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config_model.json"
+            )
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                model_info = config.get("models", {}).get(model_lower)
+                if model_info and model_info.get("provider") == "relay":
+                    return True
+        except Exception:
+            pass
+        return False

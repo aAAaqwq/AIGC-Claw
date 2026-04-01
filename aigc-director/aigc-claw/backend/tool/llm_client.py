@@ -6,11 +6,13 @@ try:
     from tool.llm_gemini import Gemini
     from tool.llm_deepseek import DeepSeek
     from tool.llm_dashscope import QwenLLM
+    from tool.relay_client import RelayClient
 except ImportError:
     from llm_gpt import GPT
     from llm_gemini import Gemini
     from llm_deepseek import DeepSeek
     from llm_dashscope import QwenLLM
+    from relay_client import RelayClient
 
 from config import Config
 
@@ -25,6 +27,17 @@ class LLM:
         self.deepseek_base_url = deepseek_base_url or os.getenv("DEEPSEEK_BASE_URL", "")
         self.deepseek_api_key = deepseek_api_key or os.getenv("DEEPSEEK_API_KEY", "")
         self.dashscope_api_key = dashscope_api_key or os.getenv("DASHSCOPE_API_KEY", "")
+
+        # 初始化中转站客户端（如果配置了）
+        self._relay_client = None
+        relay_key = os.getenv("RELAY_API_KEY", "")
+        relay_url = os.getenv("RELAY_BASE_URL", "")
+        if relay_key and relay_url:
+            try:
+                self._relay_client = RelayClient(api_key=relay_key, base_url=relay_url)
+                logger.info("Relay client 初始化成功")
+            except Exception as e:
+                logger.warning(f"Relay client 初始化失败: {e}")
 
     def full_to_half(self, text):
         if not isinstance(text, str):
@@ -63,7 +76,14 @@ class LLM:
             
         result = ""
         model_lower = model.lower()
-        if model_lower.startswith("gemini"):
+
+        # 判断是否通过中转站调用（优先级：config_model.json 中 provider=relay）
+        is_relay_model = self._is_relay_model(model_lower)
+
+        if is_relay_model and self._relay_client:
+            # 通过中转站统一调用
+            result = self._relay_client.chat(prompt, model=model, image_urls=image_urls, web_search=web_search)
+        elif model_lower.startswith("gemini"):
             # Gemini client handles its own credentials internally in the current implementation,
             # but we pass args for consistency/future compatibility.
             # Note: Gemini doesn't have built-in web search parameter, user needs to use Function Calling
@@ -86,3 +106,30 @@ class LLM:
         
         # Remove empty lines
         return '\n'.join([line for line in result.split('\n') if line.strip() != ''])
+
+    def _is_relay_model(self, model_lower: str) -> bool:
+        """
+        判断模型是否应通过中转站调用
+        优先读取 config_model.json 中的 provider 字段，
+        如果未配置或中转站不可用，则回退到直连。
+        """
+        if not self._relay_client:
+            return False
+
+        # 尝试从 config_model.json 读取 provider
+        try:
+            import json
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config_model.json"
+            )
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                model_info = config.get("models", {}).get(model_lower)
+                if model_info and model_info.get("provider") == "relay":
+                    return True
+        except Exception:
+            pass
+
+        return False

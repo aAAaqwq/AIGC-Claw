@@ -15,10 +15,15 @@ try:
     from tool.video_wan import WanVideoClient
     from tool.image_jimeng import JiMengClient
     from tool.video_kling import KlingVideoClient
+    from tool.relay_client import RelayClient
 except ImportError:
     from video_wan import WanVideoClient
     from image_jimeng import JiMengClient
     from video_kling import KlingVideoClient
+    try:
+        from relay_client import RelayClient
+    except ImportError:
+        RelayClient = None
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,20 @@ class VideoClient:
             secret_key=kling_secret_key,
             base_url=kling_base_url,
         )
+
+        # Relay 客户端 (第三方中转，如青云 API)
+        self.relay_client = None
+        _relay_key = os.getenv("RELAY_API_KEY", "")
+        _relay_url = os.getenv("RELAY_BASE_URL", "")
+        if _relay_key and _relay_url and RelayClient is not None:
+            try:
+                self.relay_client = RelayClient(
+                    api_key=_relay_key,
+                    base_url=_relay_url,
+                )
+                logger.info("VideoClient: RelayClient initialized")
+            except Exception as e:
+                logger.warning(f"VideoClient: RelayClient init failed: {e}")
 
     def generate_video(
         self,
@@ -105,6 +124,11 @@ class VideoClient:
             print("-" * 30)
 
         model_lower = model.lower()
+
+        # Relay routing (sora-2, veo, grok-video, seedance via 青云等中转)
+        _relay_kws = ("sora-2", "veo_3", "grok-video", "seedance", "relay")
+        if any(kw in model_lower for kw in _relay_kws):
+            return self._generate_relay(prompt, image_path, save_path, model)
 
         if "jimeng" in model_lower:
             return self._generate_jimeng(prompt, image_path, save_path, model)
@@ -184,3 +208,27 @@ class VideoClient:
             duration=duration,
             sound=sound,
         )
+
+    def _generate_relay(
+        self,
+        prompt: str,
+        image_path: str,
+        save_path: str,
+        model: str,
+    ) -> str:
+        """通过第三方中转 API (如青云) 生成视频"""
+        logger.info(f"VideoClient: 路由至 relay model={model}")
+        if not self.relay_client:
+            raise RuntimeError(
+                f"Video model '{model}' requires relay API but RelayClient not initialized. "
+                "Set RELAY_API_KEY and RELAY_BASE_URL env vars."
+            )
+        # relay_client expects image_url; pass local path as-is (relay_client may handle it)
+        # If needed, callers should provide a URL or the relay client handles base64 conversion
+        result = self.relay_client.generate_video(
+            prompt=prompt,
+            model=model,
+            image_url=image_path if image_path and not str(image_path).startswith("data:") else None,
+            save_path=save_path,
+        )
+        return result

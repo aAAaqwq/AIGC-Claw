@@ -54,6 +54,16 @@ class Config:
     ARK_API_KEY = os.getenv("ARK_API_KEY", "")
     ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 
+    # ==========================
+    # 第三方中转站（Relay）配置
+    # ==========================
+    # 统一中转 API，支持 OpenAI 兼容格式，一个 key 调用所有模型
+    # 支持的中转站：青云 (qingyun)、Xingsuancode 等
+    RELAY_API_KEY = os.getenv("RELAY_API_KEY", "")
+    RELAY_BASE_URL = os.getenv("RELAY_BASE_URL", "")
+    # 可选：指定中转站名称，用于日志标识
+    RELAY_PROVIDER_NAME = os.getenv("RELAY_PROVIDER_NAME", "relay")
+
     # 管理员密码（用于删除历史记录等管理操作）
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 

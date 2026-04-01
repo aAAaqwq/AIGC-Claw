@@ -11,12 +11,17 @@ try:
     from tool.image_seedream import SeedreamClient
     from tool.image_gpt import ImageGPT
     from tool.image_processor import ImageProcessor
+    from tool.relay_client import RelayClient
 except ImportError:
     from image_dashscope import DashScopeClient
     from image_jimeng import JiMengClient
     from image_seedream import SeedreamClient
     from image_gpt import ImageGPT
     from image_processor import ImageProcessor
+    try:
+        from relay_client import RelayClient
+    except ImportError:
+        RelayClient = None
 
 class ImageClient:
     def __init__(self,
@@ -65,6 +70,20 @@ class ImageClient:
         # Initialize Image Processor for downloads
         self.image_processor = ImageProcessor()
 
+        # Initialize Relay Client (第三方中转 API，如青云)
+        self.relay_client = None
+        _relay_key = os.getenv("RELAY_API_KEY", "")
+        _relay_url = os.getenv("RELAY_BASE_URL", "")
+        if _relay_key and _relay_url and RelayClient is not None:
+            try:
+                self.relay_client = RelayClient(
+                    api_key=_relay_key,
+                    base_url=_relay_url,
+                )
+                logging.info("ImageClient: RelayClient initialized")
+            except Exception as e:
+                logging.warning(f"ImageClient: RelayClient init failed: {e}")
+
         # Default save directory
         self.base_save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "code", "result", "image_client")
 
@@ -111,6 +130,8 @@ class ImageClient:
         is_jimeng = "jimeng" in model.lower()
         is_seedream = "seedream" in model.lower()
         is_sora = "sora" in model.lower() or "gpt" in model.lower()
+        _ml = model.lower()
+        is_relay = any(kw in _ml for kw in ("gemini-3-pro-image", "grok-imagine", "relay"))
         
         # Prepare save directory
         if not save_dir:
@@ -144,6 +165,26 @@ class ImageClient:
                 
             except Exception as e:
                 logging.error(f"JiMeng generation failed: {e}")
+
+        elif is_relay:
+            # --- Relay (第三方中转，如青云 API) ---
+            try:
+                logging.info(f"ImageClient requesting relay: {model}")
+                if not self.relay_client:
+                    raise RuntimeError(
+                        f"Image model '{model}' requires relay API but RelayClient not initialized. "
+                        "Set RELAY_API_KEY and RELAY_BASE_URL env vars."
+                    )
+                paths = self.relay_client.generate_image(
+                    prompt=prompt,
+                    model=model,
+                    save_dir=save_dir,
+                    size=size,
+                )
+                if paths:
+                    generated_local_paths.extend(paths)
+            except Exception as e:
+                logging.error(f"Relay image generation failed: {e}")
 
         elif is_seedream:
             # --- Seedream Logic ---

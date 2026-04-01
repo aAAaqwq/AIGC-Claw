@@ -217,6 +217,48 @@
       "type": ["video"],
       "concurrency": 3,
       "price_per_second": 0.3
+    },
+    "gemini-3-pro-image-preview_relay": {
+      "name": "Gemini 3 Pro Image (青云中转)",
+      "provider": "relay",
+      "type": ["t2i"],
+      "concurrency": 3,
+      "price_per_image": 0.05
+    },
+    "grok-imagine-image-pro_relay": {
+      "name": "Grok Imagine Image Pro (青云中转)",
+      "provider": "relay",
+      "type": ["t2i"],
+      "concurrency": 3,
+      "price_per_image": 0.05
+    },
+    "sora-2-all_relay": {
+      "name": "Sora 2 All (青云中转)",
+      "provider": "relay",
+      "type": ["video"],
+      "concurrency": 1,
+      "price_per_second": 0.5
+    },
+    "veo_3_1-fast-4K_relay": {
+      "name": "Veo 3.1 Fast 4K (青云中转)",
+      "provider": "relay",
+      "type": ["video"],
+      "concurrency": 1,
+      "price_per_second": 0.5
+    },
+    "grok-video-3-10s_relay": {
+      "name": "Grok Video 3 10s (青云中转)",
+      "provider": "relay",
+      "type": ["video"],
+      "concurrency": 1,
+      "price_per_second": 0.5
+    },
+    "doubao-seedance-1.5-pro_relay": {
+      "name": "Seedance 1.5 Pro (青云中转)",
+      "provider": "relay",
+      "type": ["video"],
+      "concurrency": 1,
+      "price_per_second": 0.3
     }
   }
 }
