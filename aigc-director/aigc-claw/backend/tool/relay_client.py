@@ -386,8 +386,8 @@ class RelayClient:
             body["image_url"] = image_url
         body.update(kwargs)
 
-        # 使用 raw HTTP 请求（视频 API 通常是自定义格式）
-        url = f"{self._base_url_no_v1}/v1/video/generations"
+        # 使用青云原生视频创建端点 (非 OpenAI 格式)
+        url = f"{self._base_url_no_v1}/v1/video/create"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",

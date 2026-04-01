@@ -126,9 +126,9 @@ class VideoClient:
         model_lower = model.lower()
 
         # Relay routing (sora-2, veo, grok-video, seedance via 青云等中转)
-        _relay_kws = ("sora-2", "veo_3", "grok-video", "seedance", "relay")
+        _relay_kws = ("sora-2", "veo_3", "veo3", "grok-video", "seedance", "relay")
         if any(kw in model_lower for kw in _relay_kws):
-            return self._generate_relay(prompt, image_path, save_path, model)
+            return self._generate_relay(prompt, image_path, save_path, model, duration)
 
         if "jimeng" in model_lower:
             return self._generate_jimeng(prompt, image_path, save_path, model)
@@ -215,6 +215,7 @@ class VideoClient:
         image_path: str,
         save_path: str,
         model: str,
+        duration: int = 10,
     ) -> str:
         """通过第三方中转 API (如青云) 生成视频"""
         logger.info(f"VideoClient: 路由至 relay model={model}")
@@ -224,11 +225,12 @@ class VideoClient:
                 "Set RELAY_API_KEY and RELAY_BASE_URL env vars."
             )
         # relay_client expects image_url; pass local path as-is (relay_client may handle it)
-        # If needed, callers should provide a URL or the relay client handles base64 conversion
         result = self.relay_client.generate_video(
             prompt=prompt,
             model=model,
             image_url=image_path if image_path and not str(image_path).startswith("data:") else None,
             save_path=save_path,
+            size="1920x1080",
+            duration=duration,
         )
         return result
