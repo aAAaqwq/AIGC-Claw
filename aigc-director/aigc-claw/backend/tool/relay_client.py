@@ -413,7 +413,7 @@ class RelayClient:
 
     def _poll_task(self, task_id: str, interval: int = 10, max_wait: int = 600) -> dict:
         """轮询异步任务状态"""
-        url = f"{self._base_url_no_v1}/v1/video/{task_id}"
+        url = f"{self._base_url_no_v1}/v1/videos/{task_id}"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         elapsed = 0
